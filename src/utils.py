@@ -1,0 +1,157 @@
+from heapq import heappop, heappush
+
+import numpy as np
+import pygame
+import pygame_widgets
+
+
+def play_solution(solution, game, widgets, show_solution, moves):
+	for move in solution:
+		events = pygame.event.get()
+		moves += game.player.update(move)
+		game.floor_group.draw(game.window)
+		game.goal_group.draw(game.window)
+		game.object_group.draw(game.window)
+		pygame_widgets.update(events)
+		widgets['label'].draw()
+		widgets['seed'].draw()
+		widgets['visualizer'].draw()
+		widgets['moves_label'].set_moves(f' Moves - {moves} ', 20)
+		if show_solution:
+			widgets['paths'].draw()
+		pygame.display.update()
+		pygame.time.delay(130)
+	return moves
+
+
+def print_state(state, shape):
+	if not state:
+		return
+	m, n = shape
+	matrix = np.array(list(state)).reshape(m, n)
+	print(matrix)
+
+
+def find_boxes_and_goals(state, shape):
+	_, width = shape
+	boxes, goals, boxes_on_goal = [], [], []
+	for pos, char in enumerate(state):
+		if char == '@':
+			boxes.append((pos // width, pos % width))
+		elif char in 'X%':
+			goals.append((pos // width, pos % width))
+		elif char == '$':
+			boxes_on_goal.append((pos // width, pos % width))
+	return boxes, goals, boxes_on_goal
+
+
+def get_state(matrix):
+	return matrix.tobytes().decode('utf-8').replace('\x00', '')
+
+
+def is_solved(state):
+	return '@' not in state
+
+
+def manhattan_sum(state, player_pos, shape):
+	height, width = shape
+	player_x, player_y = player_pos
+	boxes, goals, _ = find_boxes_and_goals(state, shape)
+	boxes_cost = len(boxes) * height * width
+	player_cost = 0
+	for box_x, box_y in boxes:
+		boxes_cost += min(abs(box_x - goal_x) + abs(box_y - goal_y) 
+						  for goal_x, goal_y in goals)
+	player_cost = min(abs(box_x - player_x) + abs(box_y - player_y) 
+					  for box_x, box_y in boxes) if boxes else 0
+	return boxes_cost + player_cost
+
+
+
+
+def is_deadlock(state, shape):
+	height, width = shape
+	if not state or len(state) != height * width:
+		return False
+	boxes, _, _ = find_boxes_and_goals(state, shape)
+	for bx, by in boxes:  # corner deadlock
+		box = bx * width + by
+		if ((state[box - 1] == '+' and state[box - width] == '+') or
+			(state[box + 1] == '+' and state[box + width] == '+') or
+			(state[box + 1] == '+' and state[box - width] == '+') or
+			(state[box - 1] == '+' and state[box + width] == '+')):
+			return True
+	double_box_positions = [
+		(0, -1, -width, -width - 1),
+		(0, 1, -width, -width + 1),
+		(0, -1, width - 1, width),
+		(0, 1, width + 1, width),
+	]
+	for bx, by in boxes:  # double box deadlock
+		box = bx * width + by
+		for pos in double_box_positions:
+			pos_set = set()
+			for dir in pos:
+				pos_set.add(state[box + dir])
+			if pos_set in ({'@', '+'}, {'@'}, {'@', '$'}, {'@', '$', '+'}):
+				return True
+	box = goal = 0
+	for i in range(width + 1, 2 * width - 1):  # too many boxes deadlock
+		if state[i] == '@':
+			box += 1
+		elif state[i] in 'X%':
+			goal += 1
+	if box > goal:
+		return True
+	box = goal = 0
+	for i in range(width * (height - 2) + 1, width * (height - 2) + width - 1):
+		if state[i] == '@':
+			box += 1
+		elif state[i] in 'X%':
+			goal += 1
+	if box > goal:
+		return True
+	box = goal = 0
+	for i in range(width + 1, width * (height - 1) + 1, width):
+		if state[i] == '@':
+			box += 1
+		elif state[i] in 'X%':
+			goal += 1
+	if box > goal:
+		return True
+	box = goal = 0
+	for i in range(2 * width - 2, width * height - 2, width):
+		if state[i] == '@':
+			box += 1
+		elif state[i] in 'X%':
+			goal += 1
+	if box > goal:
+		return True
+	return False
+
+
+def can_move(state, shape, player_pos, move):
+	new_state = list(state)
+	x, y = player_pos
+	_, width = shape
+	move_cost = 0
+	target = x + move[0], y + move[1]
+	boxtarget = x + move[0] * 2, y + move[1] * 2
+	curr1d = x * width + y
+	target1d = target[0] * width + target[1]
+	boxtarget1d = boxtarget[0] * width + boxtarget[1]
+	if state[target1d] == '+':
+		return None, move_cost
+	elif state[target1d] in '-X':
+		new_state[curr1d] = '-' if new_state[curr1d] == '*' else 'X'
+		new_state[target1d] = '*' if new_state[target1d] == '-' else '%'
+		move_cost = 3
+	elif state[target1d] in '@$':
+		if state[boxtarget1d] in '+@$':
+			return None, move_cost
+		elif state[boxtarget1d] in '-X':
+			new_state[boxtarget1d] = '@' if new_state[boxtarget1d] == '-' else '$'
+			new_state[target1d] = '*' if new_state[target1d] == '@' else '%'
+			new_state[curr1d] = '-' if new_state[curr1d] == '*' else 'X'
+			move_cost = 0 if new_state[boxtarget1d] == '$' else 2
+	return ''.join(new_state), move_cost
